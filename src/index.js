@@ -6,9 +6,9 @@ const PORT = process.env.PORT || 7000;
 
 const MANIFEST = {
   id: 'org.cizgimax.nuvio',
-  version: '3.0.0',
+  version: '3.1.0',
   name: 'ÇizgiMax Pro',
-  description: 'ÇizgiMax Arama Motoru Entegrasyonlu Yayın Sağlayıcı',
+  description: 'ÇizgiMax Hızlı Yayın Sağlayıcı',
   resources: ['stream'],
   types: ['series', 'anime', 'movie'],
   idPrefixes: ['tt', 'cizgimax']
@@ -34,8 +34,8 @@ app.get('/stream/:type/:id.json', async (req, res) => {
       season = parts[1] || '1';
       episode = parts[2] || '1';
 
-      // Cinemeta üzerinden dizi/film adını al
-      const metaRes = await axios.get(`https://v3-cinemeta.strem.io/meta/${req.params.type}/${imdbId}.json`);
+      // Hızlı Cinemeta İsteği (1.5sn zaman aşımı limitli)
+      const metaRes = await axios.get(`https://v3-cinemeta.strem.io/meta/${req.params.type}/${imdbId}.json`, { timeout: 1500 });
       searchTitle = metaRes.data?.meta?.name;
     } else {
       searchTitle = id;
@@ -43,70 +43,63 @@ app.get('/stream/:type/:id.json', async (req, res) => {
 
     if (!searchTitle) return res.json({ streams: [] });
 
-    // 1. ÇizgiMax Arama Motorunda Diziyi Ara
-    const searchUrl = `https://cizgimax.online/?s=${encodeURIComponent(searchTitle)}`;
-    const searchRes = await axios.get(searchUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://cizgimax.online/'
-      }
-    });
-
-    const searchHtml = searchRes.data;
+    // Temel slug ve Arama Slug'larını Paralel Hazırla
+    const cleanSlug = searchTitle.toLowerCase().replace(/[^a-z0-9\s-]/g, '').trim().replace(/\s+/g, '-');
     
-    // Arama sonuçlarından ilk dizi/film sayfasının linkini çek
-    const firstResultMatch = searchHtml.match(/<a[^>]+href=["'](https?:\/\/cizgimax\.online\/[^"']+)["'][^>]*>/i);
-    let targetUrl = '';
+    // Olası ÇizgiMax bağlantı formatları
+    const candidateUrls = [
+      `https://cizgimax.online/${cleanSlug}-${season}-sezon-${episode}-bolum-izle/`,
+      `https://cizgimax.online/${cleanSlug}/`
+    ];
 
-    if (firstResultMatch && firstResultMatch[1]) {
-      let mainPageUrl = firstResultMatch[1];
-      if (mainPageUrl.endsWith('/')) mainPageUrl = mainPageUrl.slice(0, -1);
-      
-      // Bölüm URL'sini oluştur
-      targetUrl = `${mainPageUrl}-${season}-sezon-${episode}-bolum-izle/`;
-    } else {
-      // Doğrudan slug denemesi
-      const slug = searchTitle.toLowerCase().replace(/[^a-z0-9\s-]/g, '').trim().replace(/\s+/g, '-');
-      targetUrl = `https://cizgimax.online/${slug}-${season}-sezon-${episode}-bolum-izle/`;
-    }
-
-    // 2. Bölüm Sayfasını Çek ve Player Linklerini Yakala
-    const pageRes = await axios.get(targetUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://cizgimax.online/'
-      }
-    });
-
-    const pageHtml = pageRes.data;
-    const streams = [];
-
-    // Player seçeneklerini tara (Vidmoly, Playru, Sibnet)
-    const optionMatches = [...pageHtml.matchAll(/<option[^>]+value=["']([^"']+)["'][^>]*>([^<]+)<\/option>/gi)];
-    
-    for (const match of optionMatches) {
-      let embedUrl = match[1];
-      const name = match[2].trim();
-
-      if (embedUrl && (embedUrl.includes('http') || embedUrl.startsWith('//'))) {
-        if (embedUrl.startsWith('//')) embedUrl = `https:${embedUrl}`;
-        
-        streams.push({
-          title: `ÇizgiMax - ${name}`,
-          url: embedUrl
+    // İki adresi de aynı anda tara (Hangisi hızlı dönerse)
+    const streamPromises = candidateUrls.map(async (targetUrl) => {
+      try {
+        const response = await axios.get(targetUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+            'Referer': 'https://cizgimax.online/'
+          },
+          timeout: 2000
         });
+
+        const html = response.data;
+        const foundStreams = [];
+
+        // Player alternatiflerini tara (Vidmoly, Playru, Sibnet)
+        const optionMatches = [...html.matchAll(/<option[^>]+value=["']([^"']+)["'][^>]*>([^<]+)<\/option>/gi)];
+        
+        for (const match of optionMatches) {
+          let embedUrl = match[1];
+          const name = match[2].trim();
+
+          if (embedUrl && (embedUrl.includes('http') || embedUrl.startsWith('//'))) {
+            if (embedUrl.startsWith('//')) embedUrl = `https:${embedUrl}`;
+            foundStreams.push({
+              title: `ÇizgiMax - ${name}`,
+              url: embedUrl
+            });
+          }
+        }
+        return foundStreams;
+      } catch (e) {
+        return [];
       }
-    }
+    });
+
+    const results = await Promise.all(streamPromises);
+    const streams = results.flat();
 
     if (streams.length > 0) {
       return res.json({ streams });
     }
 
   } catch (error) {
-    console.error('ÇizgiMax Pro Hata:', error.message);
+    console.error('Hızlı Tarama Hatası:', error.message);
   }
 
+  // Zaman aşımına düşmemesi için boş yayın dizisini anında dön
   res.json({ streams: [] });
 });
 
-app.listen(PORT, () => console.log(`ÇizgiMax Pro Eklentisi ${PORT} portunda aktif!`));
+app.listen(PORT, () => console.log(`ÇizgiMax Hızlı Eklenti ${PORT} portunda aktif!`));
