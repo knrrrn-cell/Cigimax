@@ -6,9 +6,9 @@ const PORT = process.env.PORT || 7000;
 
 const MANIFEST = {
   id: 'org.cizgimax.nuvio',
-  version: '2.5.0',
-  name: 'ÇizgiMax Addon',
-  description: 'ÇizgiMax IMDB ve Türkçe İsim Eşleştirmeli Yayın Sağlayıcı',
+  version: '3.0.0',
+  name: 'ÇizgiMax Pro',
+  description: 'ÇizgiMax Arama Motoru Entegrasyonlu Yayın Sağlayıcı',
   resources: ['stream'],
   types: ['series', 'anime', 'movie'],
   idPrefixes: ['tt', 'cizgimax']
@@ -24,48 +24,65 @@ app.get('/stream/:type/:id.json', async (req, res) => {
   const { id } = req.params;
 
   try {
-    let targetUrl = '';
+    let searchTitle = '';
+    let season = '1';
+    let episode = '1';
 
-    // Eğer istek IMDB ID olarak geldiyse (Örn: tt1865718:1:1)
     if (id.startsWith('tt')) {
       const parts = id.split(':');
       const imdbId = parts[0];
-      const season = parts[1] || '1';
-      const episode = parts[2] || '1';
+      season = parts[1] || '1';
+      episode = parts[2] || '1';
 
-      // 1. IMDB ID'den dizinin İngilizce/Türkçe adını Cinemeta API ile öğren
+      // Cinemeta üzerinden dizi/film adını al
       const metaRes = await axios.get(`https://v3-cinemeta.strem.io/meta/${req.params.type}/${imdbId}.json`);
-      const showName = metaRes.data?.meta?.name;
-
-      if (showName) {
-        // Dizi adını ÇizgiMax URL formatına dönüştür (Örn: Gravity Falls -> gravity-falls)
-        const slug = showName
-          .toLowerCase()
-          .replace(/[^a-z0-9\s-]/g, '')
-          .trim()
-          .replace(/\s+/g, '-');
-
-        targetUrl = `https://cizgimax.online/${slug}-${season}-sezon-${episode}-bolum-izle/`;
-      }
+      searchTitle = metaRes.data?.meta?.name;
     } else {
-      targetUrl = `https://cizgimax.online/${id}/`;
+      searchTitle = id;
     }
 
-    if (!targetUrl) return res.json({ streams: [] });
+    if (!searchTitle) return res.json({ streams: [] });
 
-    // 2. ÇizgiMax sayfasını çek ve video alternatiflerini tara
-    const response = await axios.get(targetUrl, {
+    // 1. ÇizgiMax Arama Motorunda Diziyi Ara
+    const searchUrl = `https://cizgimax.online/?s=${encodeURIComponent(searchTitle)}`;
+    const searchRes = await axios.get(searchUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Referer': 'https://cizgimax.online/'
       }
     });
 
-    const html = response.data;
+    const searchHtml = searchRes.data;
+    
+    // Arama sonuçlarından ilk dizi/film sayfasının linkini çek
+    const firstResultMatch = searchHtml.match(/<a[^>]+href=["'](https?:\/\/cizgimax\.online\/[^"']+)["'][^>]*>/i);
+    let targetUrl = '';
+
+    if (firstResultMatch && firstResultMatch[1]) {
+      let mainPageUrl = firstResultMatch[1];
+      if (mainPageUrl.endsWith('/')) mainPageUrl = mainPageUrl.slice(0, -1);
+      
+      // Bölüm URL'sini oluştur
+      targetUrl = `${mainPageUrl}-${season}-sezon-${episode}-bolum-izle/`;
+    } else {
+      // Doğrudan slug denemesi
+      const slug = searchTitle.toLowerCase().replace(/[^a-z0-9\s-]/g, '').trim().replace(/\s+/g, '-');
+      targetUrl = `https://cizgimax.online/${slug}-${season}-sezon-${episode}-bolum-izle/`;
+    }
+
+    // 2. Bölüm Sayfasını Çek ve Player Linklerini Yakala
+    const pageRes = await axios.get(targetUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://cizgimax.online/'
+      }
+    });
+
+    const pageHtml = pageRes.data;
     const streams = [];
 
-    // Option etiketlerindeki Vidmoly, Playru, Sibnet vb. linkleri yakala
-    const optionMatches = [...html.matchAll(/<option[^>]+value=["']([^"']+)["'][^>]*>([^<]+)<\/option>/gi)];
+    // Player seçeneklerini tara (Vidmoly, Playru, Sibnet)
+    const optionMatches = [...pageHtml.matchAll(/<option[^>]+value=["']([^"']+)["'][^>]*>([^<]+)<\/option>/gi)];
     
     for (const match of optionMatches) {
       let embedUrl = match[1];
@@ -86,10 +103,10 @@ app.get('/stream/:type/:id.json', async (req, res) => {
     }
 
   } catch (error) {
-    console.error('ÇizgiMax Eşleştirme Hatası:', error.message);
+    console.error('ÇizgiMax Pro Hata:', error.message);
   }
 
   res.json({ streams: [] });
 });
 
-app.listen(PORT, () => console.log(`ÇizgiMax Eklentisi ${PORT} portunda aktif!`));
+app.listen(PORT, () => console.log(`ÇizgiMax Pro Eklentisi ${PORT} portunda aktif!`));
