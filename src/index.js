@@ -1,15 +1,14 @@
 const express = require('express');
-const puppeteer = require('puppeteer-core');
-const chromium = require('@sparticuz/chromium');
+const axios = require('axios');
 
 const app = express();
 const PORT = process.env.PORT || 7000;
 
 const MANIFEST = {
   id: 'org.cizgimax.nuvio',
-  version: '1.1.0',
-  name: 'ÇizgiMax Scraper (Pro)',
-  description: 'ÇizgiMax içeriklerini Nuvio üzerinde dinamik olarak izleyin.',
+  version: '1.2.0',
+  name: 'ÇizgiMax Scraper',
+  description: 'ÇizgiMax doğrudan video kaynağı çekici',
   resources: ['stream'],
   types: ['series', 'anime', 'movie'],
   idPrefixes: ['cizgimax']
@@ -23,60 +22,38 @@ app.get('/manifest.json', (req, res) => {
 app.get('/stream/:type/:id.json', async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   const { id } = req.params;
-  let browser = null;
 
   try {
     const targetUrl = `https://cizgimax.online/${id}`;
-
-    browser = await puppeteer.launch({
-      args: chromium.args,
-      defaultViewport: chromium.defaultViewport,
-      executablePath: await chromium.executablePath(),
-      headless: chromium.headless,
-    });
-
-    const page = await browser.newPage();
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-
-    let streamUrl = null;
-
-    // Sayfadaki video/m3u8/iframe ağ isteklerini dinle
-    page.on('request', request => {
-      const url = request.url();
-      if (url.includes('.m3u8') || url.includes('/embed/') || url.includes('video')) {
-        if (!streamUrl && !url.includes('google') && !url.includes('analytics')) {
-          streamUrl = url;
-        }
+    const response = await axios.get(targetUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://cizgimax.online/'
       }
     });
 
-    await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 25000 });
+    const html = response.data;
 
-    if (!streamUrl) {
-      const iframeSrc = await page.evaluate(() => {
-        const iframe = document.querySelector('iframe');
-        return iframe ? iframe.src : null;
-      });
-      streamUrl = iframeSrc;
-    }
+    // 1. Durum: Sayfa kaynağında geçen .m3u8 veya .mp4 bağlantılarını regex ile ara
+    const streamMatch = html.match(/(https?:\/\/[^"' ]+\.(?:m3u8|mp4)[^"' ]*)/i) || 
+                        html.match(/file:\s*["']([^"']+)["']/i) ||
+                        html.match(/source:\s*["']([^"']+)["']/i);
 
-    if (streamUrl) {
+    if (streamMatch && streamMatch[1]) {
       return res.json({
         streams: [
           {
-            title: 'ÇizgiMax - Canlı Kaynak',
-            url: streamUrl.startsWith('//') ? `https:${streamUrl}` : streamUrl
+            title: 'ÇizgiMax - Doğrudan Yayın',
+            url: streamMatch[1]
           }
         ]
       });
     }
   } catch (error) {
-    console.error('ÇizgiMax Bot Hatası:', error.message);
-  } finally {
-    if (browser) await browser.close();
+    console.error('ÇizgiMax Kaynak Çekme Hatası:', error.message);
   }
 
   res.json({ streams: [] });
 });
 
-app.listen(PORT, () => console.log(`ÇizgiMax Nuvio Eklentisi ${PORT} portunda aktif!`));
+app.listen(PORT, () => console.log(`Eklenti ${PORT} portunda aktif!`));
