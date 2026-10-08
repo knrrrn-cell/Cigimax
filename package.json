@@ -1,5 +1,5 @@
 {
-  "name": "cizgimax-nuvio-addonn",
+  "name": "cizgimax-nuvio-addon",
   "version": "1.2.0",
   "description": "ÇizgiMax Direct Scraper Addon",
   "main": "src/index.js",
